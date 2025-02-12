@@ -1,111 +1,28 @@
-import numpy as np
-import pandas as pd
 import sympy as sp
-from scipy.integrate import solve_ivp
+import numpy as np
 
-class quadSysSym:
-    def __init__(self,T):
-        self.ts = T
-        self.g = 9.8066
+# Define symbolic variables in SymPy
+a, t, hover_t, t_len = sp.symbols('a t hover_t t_len')
 
-    def fdot(self,x,u):
-        v = x[3:6,0]
-        q = x[6::,0]
-        omg = u[1::,0]
-    
-        p_dot = v
-        g = sp.Matrix([[0],[0],[-self.g]])
-        c = sp.Matrix([[0],[0],[u[0,0]]])
-        v_dot = g + self.Rquat(q)@c
-        #print("v_dot", v_dot)
-        q_dot = 0.5*self.quatProd(q)@omg.row_insert(0, sp.Matrix([0]))
+# Define the sympy expression with Heaviside
+XRef_expr = sp.Heaviside(t - hover_t) * 3 * sp.sin(4 * sp.pi * a * t / t_len)
 
-        #print("q_dot: ", q_dot)
-        
-        fd = sp.Matrix.vstack(p_dot,v_dot,q_dot)
-        #print("fd: ", fd)
-        return fd
+# Custom Heaviside function for numpy that supports arrays
+def heaviside(x, zero_value=0):
+    return np.where(x > 0, 1, 0)
 
-    def getf_func(self):
-        X = sp.Matrix(sp.symbols("x,y,z,vx,vy,vz,qw,qx,qy,qz"))
-        U = sp.Matrix(sp.symbols("c,wx,wy,wz"))
+# Lambdify with custom Heaviside function and numpy as backend
+# Vectorize the function to handle array inputs element-wise
+XRef = sp.lambdify((a, t, hover_t, t_len), XRef_expr, {'Heaviside': heaviside, 'numpy': np})
+XRef_vectorized = np.vectorize(XRef)  # Vectorize to handle element-wise operations
 
-        f_func = sp.lambdify([X,U],self.fdot(X,U), 'numpy')
-        return f_func
-    
+# Example arrays as inputs
+self_a = 1   # Array for 'a'
+self_t = np.linspace(0, 10, 100)      # Array for 't'
+self_hover_t = 2                      # Scalar for hover_t
+self_t_len = 10                       # Scalar for t_len
 
-    @staticmethod   
-    def quatProd(q):
-        qw = q[0]
-        qx = q[1]
-        qy = q[2]
-        qz = q[3]
-
-        Q = sp.Matrix([
-           [ qw,-qx,-qy,-qz],
-           [qx,qw,-qz,qy],
-           [qy,qz,qw,-qx],
-           [qz,-qy,qx,qw]
-        ])
-        return Q
-
-    @staticmethod   
-    def Rquat(q):
-        qw = q[0]
-        qx = q[1]
-        qy = q[2]
-        qz = q[3]
-
-        Q = sp.Matrix([
-            [1-2*(qy**2+qz**2),2*(qx*qy+qw*qz),2*(qx*qz-qw*qy)],
-            [2*(qx*qy-qw*qz),1-2*(qx**2+qz**2),2*(qy*qz+qw*qx)],
-            [2*(qx*qz+qw*qy), 2*(qy*qz-qw*qx),1-2*(qx**2+qy**2)]
-        ])
-        return Q.T  
-    
-    
-class quadSys:
-
-    def __init__(self,T):
-        self.ts = T
-        self.drone = quadSysSym(self.ts)
-        self.loadRef()
-        self.loadModel()
-    
-    def loadModel(self):
-        self.f = self.drone.getf_func()
-
-    def updateState(self,x0, u0, t_start,t_end):
-        F = lambda t,x: quadrotor.f(x,u0).flatten()
-        t_eval = np.linspace(t_start, t_end, 10)
-        sol = solve_ivp(F,[t_start,t_end],x0,t_eval=t_eval)
-        xp = sol.y[:,-1]
-        return xp    
-
-    def loadRef(self):
-        self.drone.g = 9.8066
-        file = "race_0323_slits.csv"
-        df = pd.read_csv(file,index_col=None,header=0)
-        idx_x = ['p_x','p_y','p_z','v_x','v_y','v_z','q_w','q_x','q_y','q_z']
-        idx_u = ['thrust','w_x','w_y','w_z']
-        U_r = df[idx_u]
-        U_r.loc[:,'thrust'] = U_r['thrust']
-        self.X_r = df[idx_x].to_numpy()
-        self.U_r = U_r.to_numpy()
-
-drone = quadSysSym(0.01)
-
-Ts = 0.01
-quadrotor = quadSys(Ts)
-cost = 0
-x0 = quadrotor.X_r[0,:]
-
-for i in range(400):
-    u0 = quadrotor.U_r[i,:]
-    t0 = Ts*i
-    tp = Ts*(i+1)
-    xp = quadrotor.updateState(x0,u0,t0,tp)
-     
-    cost = cost + np.linalg.norm(xp - quadrotor.X_r[i+1,:])
-    print(np.linalg.norm(xp - quadrotor.X_r[i+1,:]))
-    x0 = xp
+# Broadcasting to evaluate XRef with array inputs using np.vectorize
+XRef_output = XRef_vectorized(self_a, self_t, self_hover_t, self_t_len)
+print(XRef_output)
+print("Shape of XRef output:", XRef_output.shape)
