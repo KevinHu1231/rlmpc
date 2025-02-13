@@ -26,6 +26,8 @@ matplotlib.use('Agg')
 from matplotlib import pyplot as plt
 
 ### Quaternion operations ###
+
+# Ground to Body rotation matrix for quadrotor motor
 def R_GB(q):
     qw = q[0]
     qx = q[1]
@@ -40,6 +42,7 @@ def R_GB(q):
 
     return RGB.T
 
+# Quaternion product
 def qprod(p,q):
     pw = p[0]
     px = p[1]
@@ -59,12 +62,15 @@ def qprod(p,q):
     # Return the resulting quaternion
     return sp.Matrix([rw, rx, ry, rz])
 
+# Quaternion vector
 def q_vec(v):
     return sp.Matrix([v[0],v[1],v[2],0])
 
+# Quaternion inverse
 def q_inv(v):
     return sp.Matrix([-v[0],-v[1],-v[2],v[3]])
 
+# Quaternion product matrix
 def quatProd(q):
     qw = q[0]
     qx = q[1]
@@ -121,6 +127,7 @@ class drone_mpc_env(gym.Env):
         self.action_space_lower = np.hstack([7*np.ones(2,),7*np.ones(1,),0.5*np.ones(7,),0.00001*np.ones(1,),0.5*np.ones(3,),7*np.ones(2,),7*np.ones(1,),0.5*np.ones(7,)]).astype(np.float32)
         self.action_space_higher = np.hstack([9*np.ones(2,),9*np.ones(1,),1.5*np.ones(7,),0.0002*np.ones(1,),1.5*np.ones(3,),9*np.ones(2,),9*np.ones(1,),1.5*np.ones(7,)]).astype(np.float32)
 
+        # Path to save data
         self.save_path = "Distance_Reward/"
 
         # Constants
@@ -148,19 +155,25 @@ class drone_mpc_env(gym.Env):
         # self.c = np.ones((4,1))
         self.episode = -1
 
+        # Quaternion model of quadrotor sympy experession
         self.f = self.f_syms()
         
         #self.fx = self.feq_syms()
         # self.A, self.B = self.linearize()
         # self.flinx = self.flin_syms()
 
+        # Convert function to casadi
         self.f_sys = self.f_casadi()
+
+        # Create integrator for quadrotor model
         self.create_casadi_integrator()
 
+        # Load csv simulation data
         self.create_run_folder()
 
     #### Symbolic Expression Creation ####
 
+    # Quaternion model of quadrotor system
     def fdot(self,x,u):
         v = x[3:6,0]
         q = x[6:,0]
@@ -173,6 +186,7 @@ class drone_mpc_env(gym.Env):
         self.f_dot = f_dot
         return f_dot
     
+    # Convert model to sympy expression
     def f_syms(self):
         X = sp.Matrix(sp.symbols("x,y,z,vx,vy,vz,qw,qx,qy,qz"))
         U = sp.Matrix(sp.symbols("F,wx,wy,wz"))
@@ -182,6 +196,7 @@ class drone_mpc_env(gym.Env):
         
         return f_s
     
+    # Linearized model of quadrotor system (not used)
     def feq(self,x):
         v = x[3:6,0]
         q = x[6:10,0]
@@ -196,6 +211,7 @@ class drone_mpc_env(gym.Env):
         self.f_eq = f_dot
         return f_dot
     
+    # Convert model to sympy expression (not used)
     def feq_syms(self):
         XU = sp.Matrix(sp.symbols("x,y,z,vx,vy,vz,qw,qx,qy,qz,F,wx,wy,wz"))
         self.XU = XU
@@ -204,6 +220,7 @@ class drone_mpc_env(gym.Env):
     
     ### For Linearization ###
 
+    # Linearize quadrotor model (not used)
     def linearize(self):
         Fx = lambda x: self.fx(x).flatten()
         x0_init = np.array([0,0,1,0,0,0,1,0,0,0,9.98,0,0,0])
@@ -222,6 +239,7 @@ class drone_mpc_env(gym.Env):
 
         return A, B
     
+    # Linear quadrotor model (not used)
     def flin(self,x,u):
         A = self.A
         B = self.B
@@ -231,7 +249,8 @@ class drone_mpc_env(gym.Env):
         f_linear = A@x_vec + B@u_vec
         self.f_lin = f_linear
         return f_linear
-    
+
+    # Convert to sympy expression
     def flin_syms(self):
         X = sp.Matrix(sp.symbols("x,y,z,vx,vy,vz,qw,qx,qy,qz"))
         U = sp.Matrix(sp.symbols("F,wx,wy,wz"))
@@ -346,27 +365,39 @@ class drone_mpc_env(gym.Env):
     ### Reinforcement Learning ###
 
     def reset(self,seed=None):
+
+        # Normalized parameters
         self.norm_state = self.normalize(np.array([0,0,1,0,0,0,1,0,0,0]),self.observation_space_lower[:10],self.observation_space_higher[:10])
         self.norm_reference = self.normalize(np.array([5,5,5,0,0,0,1,0,0,0]),self.observation_space_lower[:10],self.observation_space_higher[:10])
         self.norm_time = self.normalize(0,self.observation_space_lower[20],self.observation_space_higher[20])
 
+        # Unnormalized parameters
         self.state = np.array([0,0,1,0,0,0,1,0,0,0])
         self.reference = np.array([5,5,5,0,0,0,1,0,0,0])
         self.time = 0
 
         ### Randomized trajectory
         
+        # Create randomized trajectories based on random number generator with a specific limits
         self.traj_1 = self.create_random_traj((self.state[0],self.state[1]),self.time)
         self.traj_2 = self.create_random_traj((self.traj_1.end[0],self.traj_1.end[1]),self.traj_1.end_time)
+
+        # Save double trajectory data
         self.double_traj = traj.double_traj_data(self.traj_1,self.traj_2)
 
+        # Trajectory class function
         self.trajectory = traj.trajecotry()
+
+        # Generate combined trajectory based on double trajectory data
         self.double_trajectory = self.trajectory.genTrajCombined(self.double_traj)
         self.double_trajectory.create_functions(self.double_traj,self.N,self.t)
 
+        # Time to swap/extend trajectories in case number of trajectories is greater than two 
         self.swap_traj_time = self.traj_2.start_time + int((self.traj_2.end_time - self.traj_2.start_time) / 2)
 
         ###
+
+        # Reinitialize data
 
         self.Xs = [self.state]
         self.rewards = []
@@ -385,6 +416,8 @@ class drone_mpc_env(gym.Env):
 
         #self.A = self.unnormalize(action[:100],self.action_space_lower[:100],self.action_space_higher[:100]).reshape((10,10))
         #self.B = self.unnormalize(action[100:140],self.action_space_lower[100:140],self.action_space_higher[100:140]).reshape((10,4))
+
+        # Convert action spaces to matrices
         self.Q = np.diag(self.unnormalize(action[:10],self.action_space_lower[:10],self.action_space_higher[:10])) # cost for states 
         self.R = np.diag(self.unnormalize(action[10:14],self.action_space_lower[10:14],self.action_space_higher[10:14])) # cost for input
         self.Q_bar = np.diag(self.unnormalize(action[14:],self.action_space_lower[14:],self.action_space_higher[14:]))
@@ -402,17 +435,26 @@ class drone_mpc_env(gym.Env):
         # print("R: ", self.R)
         # print("Q_bar: ", self.Q_bar)
 
+        # Convert to casadi function
+
         self.f_sys = self.f_casadi()
+
+        # Run MPC and calculate cost and control input
         cost, control_input = self.mpc(self.state,self.reference)
         self.costs_opt.append(cost)
         self.Us.append(control_input)
+
+        # Update drone state
         self.state = self.update_state(self.state,control_input,self.time,self.time + self.t)
+
+        # Collect data
         self.Xs.append(self.state)
         self.time = self.time + self.t
         self.ts.append(self.time)
         current_cost = (self.state - self.reference)@self.Q@(self.state - self.reference) + control_input@self.R@control_input
         self.costs_real.append(current_cost)
 
+        # Calculate reward and if run is ended
         if cost == 1000000:
             reward = -100
             terminated = True
@@ -426,20 +468,28 @@ class drone_mpc_env(gym.Env):
 
         ####
 
+        # If time is greater than the swap time create another trajectory
         if self.time >= self.swap_traj_time:
             self.traj_next = self.create_random_traj((self.traj_2.end[0],self.traj_2.end[1]),self.traj_2.end_time)
             self.traj_new = self.traj_next
             self.traj_1 = self.traj_2
             self.traj_2 = self.traj_new
+
+            # Combine second half of previous double trajectory with new random trajectory
             self.double_traj = traj.double_traj_data(self.traj_1,self.traj_2)
             self.double_trajectory = self.trajectory.genTrajCombined(self.double_traj)
             self.double_trajectory.create_functions(self.double_traj,self.N,self.t)
+
+            # Update new swap time
             self.swap_traj_time = self.traj_2.start_time + int((self.traj_2.end_time - self.traj_2.start_time) / 2)
         
         else:
+
+            # Get x and y coordinate from reference trajectory
             x_r = self.double_trajectory.x_ref(1,self.time,self.double_trajectory.l_s)
             y_r = self.double_trajectory.x_ref(1,self.time,self.double_trajectory.l_s)
             
+            # Get distance from true state to reference trajectory state
             dist = ((self.state[0] - x_r)**2 + (self.state[1] - y_r)**2 + (self.state[2] - 1)**2)**(1/2)
 
             if (dist > self.traj_limit) or (self.state[2] <= 0): 
@@ -449,12 +499,15 @@ class drone_mpc_env(gym.Env):
         
         ####
 
+        # Plot info
         if truncated or terminated:
             try:
                 self.plot_info()
             except Exception as e:
                 print("Error: ", e)
                 print("Matplotlib Error")
+
+        # Normalize state, reference, and time
 
         self.norm_state = self.normalize(self.state,self.observation_space_lower[:10],self.observation_space_higher[:10])
         self.norm_reference = self.normalize(self.reference,self.observation_space_lower[:10],self.observation_space_higher[:10])
@@ -471,27 +524,37 @@ class drone_mpc_env(gym.Env):
         x_vals = sol.y[:,-1]
         return x_vals
     
+    # Normalize action and observation space
     def normalize(self, value, min_val, max_val):
         return (2 * ((value - min_val) / (max_val - min_val)) - 1)
     
+    # Unnormalize action and observation space
     def unnormalize(self, normalized_value, min_val, max_val):
         return ((1 + normalized_value)*(max_val - min_val)/2 + min_val)
     
+    # Custom reward function 
     def reward_function(self,state,reference):
         return -(((state[0]-reference[0])/reference[0])**2 + ((state[1]-reference[1])/reference[1])**2 + ((state[2]-reference[2])/reference[2])**2)
     
+    # Normalized distance reward function
     def normalized_distance_reward(self,state,reference):
         return -(np.linalg.norm(state[:3]-reference[:3])/np.linalg.norm(reference[:3]-np.array([0,0,1])))**2
     
+    # Create random trajectory
     def create_random_traj(self,state,time):
+
+        # Generate random trajectory type
         traj_type = np.random.randint(0, 5)
 
         if traj_type == 1 or traj_type == 3:
             angle = np.random.uniform(0, 2 * np.pi)  # Random angle in radians
             radius = np.random.uniform(3, 10)  # Random distance within the max distance
-            end_x = state[0] + radius * np.cos(angle)
+
+            # End coordinates
+            end_x = state[0] + radius * np.cos(angle) 
             end_y = state[1] + radius * np.sin(angle)
 
+            # Trajectory data
             if traj_type == 1:
                 traj_params = {}
             if traj_type == 3:
@@ -512,12 +575,16 @@ class drone_mpc_env(gym.Env):
                 amplitude = np.random.uniform(1, 10)
                 traj_params = {'Amplitude': amplitude}
         
+        # Trajectory period
         period = np.random.randint(300, 1000) / 100
         time_2 = time + period
+
+        # Save trajectory data
         data = [(state[0],state[1]),(end_x,end_y),time,time_2,traj_type,traj_params]
         traj_data = traj.traj_data(data)
         return traj_data
-
+    
+    # Create folder for saving data
     def create_run_folder(self):
         # Initialize the new path with the base path
         base_path = self.save_path + f"run"
@@ -532,6 +599,7 @@ class drone_mpc_env(gym.Env):
         os.makedirs(path)
         self.save_info_path = path
 
+    # Plot RL information
     def plot_info(self):
         self.episode += 1
         self.save_info_path_2 = self.save_info_path + f"/{self.episode}/"
@@ -540,7 +608,8 @@ class drone_mpc_env(gym.Env):
         self.Xs = np.vstack(self.Xs)
         self.Us = np.vstack(self.Us)
         self.ts = np.array(self.ts)
-    
+
+        # Quadrotor state over time plot
         fig, axes = plt.subplots(2, 3, figsize=(15, 10))
 
         axes[0, 0].plot(self.ts, self.Xs[:,0])
@@ -581,6 +650,7 @@ class drone_mpc_env(gym.Env):
         plt.savefig(traj_name)
         #plt.close(fig)
 
+        # Create quadrotor input over time plot
         fig2, axes2 = plt.subplots(2, 2, figsize=(10, 10))
 
         axes2[0, 0].plot(self.ts[:-1], self.Us[:,0])
@@ -610,6 +680,7 @@ class drone_mpc_env(gym.Env):
         plt.savefig(input_name)
         #plt.close(fig2)
 
+        # Save total MPC objective cost over time plot
         fig3 = plt.figure()
         plt.plot(self.ts[:-1],self.costs_opt)
         plt.title("MPC Objective Cost over Time")
@@ -620,6 +691,7 @@ class drone_mpc_env(gym.Env):
         plt.savefig(cost_name)
         #plt.close(fig3)
 
+        # Save current MPC objective cost over time plot
         fig4 = plt.figure()
         plt.plot(self.ts[:-1],self.costs_real)
         plt.title("Current MPC Objective Cost over Time")
@@ -629,6 +701,7 @@ class drone_mpc_env(gym.Env):
         cost_name = self.save_info_path_2 + f"cur_costs_{self.episode}.png"
         plt.savefig(cost_name)
 
+        # Save reward over time plot
         fig5 = plt.figure()
         plt.plot(self.ts[:-1],self.rewards)
         plt.title("Reward over Time")
@@ -642,6 +715,7 @@ class drone_mpc_env(gym.Env):
         self.Rs_array = np.array(self.Rs)
         self.Q_bars_array = np.array(self.Q_bars)
 
+        # Matrix values over time plot
         fig6, axes6 = plt.subplots(3, 1, figsize=(20,10))
         
         axes6[0].plot(self.ts[:-1], self.Qs_array[:,0], label='Q0')
@@ -695,6 +769,7 @@ class drone_mpc_env(gym.Env):
         #plt.close(fig4)
         plt.close('all')
 
+# Test trained model
 def test_model(env,model_path):
     model = SAC.load(model_path)
     obs = env.reset()
@@ -708,6 +783,7 @@ def test_model(env,model_path):
 
     env.close()
 
+# Train RL model
 def train(env):
     model = SAC('MlpPolicy', env, tensorboard_log='tensorboard_logs', verbose=1, seed=1)
     print(model.policy)
