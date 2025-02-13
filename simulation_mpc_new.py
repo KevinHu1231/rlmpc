@@ -559,7 +559,7 @@ if __name__ == "__main__":
         Us = []
         ts = []
 
-        #Create trajectory function
+        # Create trajectory function
         trajectory = traj.trajecotry()
 
         # Specify trajectory
