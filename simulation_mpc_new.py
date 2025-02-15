@@ -561,9 +561,10 @@ if __name__ == "__main__":
 
         # Create trajectory function
         trajectory = traj.trajecotry()
-
+        data = [(0,0),(10,10),0,5,(10,10),(10,10),5,10.4,1,2,{},{'Amplitude': 5}]
+        
         # Specify trajectory
-        tra = trajectory.genTrajCombined((0,0),(10,10),0,5,(10,10),(10,10),5,10.4,1,2,{},{'Amplitude': 5})
+        tra = trajectory.genTrajCombined(data)
 
         # Get trajectory psi angle expression
         psi_exp = trajectory.psi_exp
