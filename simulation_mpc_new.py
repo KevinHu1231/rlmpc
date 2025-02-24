@@ -1,3 +1,4 @@
+#%%
 import numpy as np
 import pandas as pd
 import sympy as sp
@@ -127,11 +128,11 @@ class quaternion_uav:
         self.X_dim = 10
         self.U_dim = 4
 
-        self.Q = np.diag(np.array([8,8,10,1,1,1,1,1,1,1])) # cost for states 
-        self.R = np.diag(np.array([0.013,1,1,1])) # cost for input
+        self.Q = np.diag(np.array([1000,1000,1000,1,1,1,100,100,100,100])) # cost for states 
+        self.R = np.diag(np.array([1,1,1,1])) # cost for input
 
 
-        self.Q_bar = np.diag(np.array([8,8,10,1,1,1,1,1,1,1])) #comment
+        self.Q_bar = 10*self.Q #comment
 
         # Use P matrix from LQR
         # Procedure to find terminal state matrix:
@@ -297,25 +298,37 @@ class quaternion_uav:
             x_next = self.integrator(x0=x_k, p=u_k)['xf']
             self.opti.subject_to(self.X[:, k+1] == x_next)
     
+    def integrator_rk4(self):
+        X = ca.MX.sym('x', 10)
+        U = ca.MX.sym('u', 4)
+        k1= self.f_sys(X, U)
+        k2 = self.f_sys(X + self.t/2 * k1, U)
+        k3 = self.f_sys(X + self.t/2 * k2, U)
+        k4 = self.f_sys(X + self.t * k3, U)
+        Xp=X+self.t/6*(k1 +2*k2 +2*k3 +k4)
+        F =  ca.Function('F', [X, U], [Xp],['x0','u'],['xf'])
+        return F
+
     # MPC Function
     def mpc(self, x0, x_ref):
         # Optimization variables
         opti = ca.Opti()
         X = opti.variable(self.X_dim, self.N+1)
         U = opti.variable(self.U_dim, self.N)
-
         # Cost function
         cost = 0
         for k in range(self.N):
             cost += ca.mtimes([(X[:, k] - x_ref[k,:]).T, self.Q, X[:, k] - x_ref[k,:]]) + ca.mtimes([U[:, k].T, self.R, U[:, k]])
 
-        cost += ca.mtimes([(X[:, self.N-1] - x_ref[k,:]).T, self.Q_bar, X[:, self.N-1] - x_ref[k,:]]) # cost for terminal state
+        cost += ca.mtimes([(X[:, self.N] - x_ref[self.N,:]).T, self.Q_bar, X[:, self.N] - x_ref[self.N,:]]) # cost for terminal state
 
     ##### System dynamics constraints
+        F = self.integrator_rk4()
 
         # Non Integration
         for k in range(self.N):
-            opti.subject_to(X[:, k+1] == X[:, k] + self.t * self.f_sys(X[:, k], U[:, k]))
+            x_next = F(X[:, k], U[:, k])
+            opti.subject_to(X[:, k+1] == x_next)
 
         # Integration
         # for k in range(self.N):
@@ -369,6 +382,9 @@ class quaternion_uav:
         sol = solve_ivp(F,[t_start,t_end],x0,t_eval=t_eval)
         x_vals = sol.y[:,-1]
         #Normalize quaternion
+        q = x_vals[6:10]
+        q_norm = np.linalg.norm(q)
+        x_vals[6:10] = q/q_norm
         return x_vals
     
     # Load csv file to test model
@@ -398,25 +414,33 @@ if __name__ == "__main__":
         Ts = uav.t
 
         cost = 0
-        x0 = uav.X_r[0,:]
-
+        x0 = uav.X_r[0,:].copy()
+        x0[0] = -1
+        x0[1] = -2
         x = []
         x_ref = []
         err = []
         t = []
+        q = []
+        q_ref = []
 
         x_err = []
 
         x.append(x0[:3])
-        x_ref.append(x0[:3])
+        x_ref.append(uav.X_r[0, 0:3])
         t.append(0)
         err.append(np.linalg.norm(x0[:3] - x0[:3]))
         x_err.append(x0[:3] - x0[:3])
 
+        q.append(x0[6::])
+        q_ref.append(uav.X_r[0, 6::])
         # MPC loop
 
-        for i in range(1115):
-            u0 = uav.U_r[i,:]
+        for i in range(1000):
+            print(i)
+            x_r_th = uav.X_r[i:i+uav.N+1, :]
+            u0 = uav.mpc(x0,x_r_th)
+            # u0 = uav.U_r[i,:]
             t0 = Ts*i
             tp = Ts*(i+1)
             t.append(tp)
@@ -433,12 +457,18 @@ if __name__ == "__main__":
             err.append(np.linalg.norm(xp[:3] - uav.X_r[i+1,:][:3]))
             x_err.append(xp[:3] - uav.X_r[i+1,:][:3])
 
+            q.append(xp[6:10])  
+            q_ref.append(uav.X_r[i+1,:][6:10])
+
             x0 = xp
         
         # Convert data for plotting
         Xs = np.vstack(x)
         X_refs = np.vstack(x_ref)
         x_errs = np.vstack(x_err)
+        Qs = np.vstack(q)
+        Q_refs = np.vstack(q_ref)
+
 
         ts = np.array(t)
         errs = np.array(err)
@@ -508,6 +538,42 @@ if __name__ == "__main__":
         fig2.suptitle('Quadrotor State Over Time', fontsize=16)
         plt.tight_layout()
 
+        fig3, axes = plt.subplots(1, 4, figsize=(15, 5))
+
+        axes[0].plot(ts, Qs[:, 0], label='Simulation', color='blue')
+        axes[0].plot(ts, Q_refs[:,0], label='Reference', color='red')
+        axes[0].set_title('qw')
+        axes[0].set_xlabel('Time (s)')
+        axes[0].set_ylabel('Distance (m)')
+
+
+        axes[1].plot(ts, Qs[:,1], label='Simulation', color='blue')
+        axes[1].plot(ts, Q_refs[:,1], label='Reference', color='red')
+        axes[1].set_title('qx')
+        axes[1].set_xlabel('Time (s)')
+        axes[1].set_ylabel('Distance (m)')
+
+
+        axes[2].plot(ts, Qs[:,2], label='Simulation', color='blue')
+        axes[2].plot(ts, Q_refs[:,2], label='Reference', color='red')
+        axes[2].set_title('qy')
+        axes[2].set_xlabel('Time (s)')
+        axes[2].set_ylabel('Distance (m)')
+
+        axes[3].plot(ts, Qs[:,3], label='Simulation', color='blue')
+        axes[3].plot(ts, Q_refs[:,3], label='Reference', color='red')
+        axes[3].set_title('qz')
+        axes[3].set_xlabel('Time (s)')
+        axes[3].set_ylabel('Distance (m)')
+
+
+        axes[0].legend()
+        axes[1].legend()
+        axes[2].legend()
+        axes[3].legend()
+
+        fig2.suptitle('Quadrotor Quaternion Over Time', fontsize=16)
+        plt.tight_layout()
         ###
 
         # Plot trajectory
@@ -766,7 +832,7 @@ if __name__ == "__main__":
         ts = np.array(ts)
 
         #Plot quadrotor state over time
-        fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+        fig, axes = plt.subplots(3, 3, figsize=(15, 10))
 
         axes[0, 0].plot(ts, Xs[:,0], color='blue')
         axes[0, 0].plot(ts, X_urefs[:,0], color='red')
@@ -808,6 +874,26 @@ if __name__ == "__main__":
         axes[1, 2].set_title('Z Velocity')
         axes[1, 2].set_xlabel('Time (s)')
         axes[1, 2].set_ylabel('Velocity (m/s)')
+
+        axes[2, 0].plot(ts, Xs[:,6], color='blue')
+        axes[2, 0].plot(ts, X_urefs[:,6], color='red')
+        axes[2, 0].set_title('Q1')
+        axes[   2, 0].set_xlabel('Time (s)')
+        axes[2, 0].set_ylabel('Velocity (m/s)')
+
+
+        axes[2, 1].plot(ts, Xs[:,7], color='blue')
+        axes[2, 1].plot(ts, X_urefs[:,7], color='red')
+        axes[2, 1].set_title('Y Velocity')
+        axes[2, 1].set_xlabel('Time (s)')
+        axes[2, 1].set_ylabel('Velocity (m/s)')
+
+
+        axes[2, 2].plot(ts, Xs[:,8], color='blue')
+        axes[2, 2].plot(ts, X_urefs[:,8], color='red')
+        axes[2, 2].set_title('Z Velocity')
+        axes[2, 2].set_xlabel('Time (s)')
+        axes[2, 2].set_ylabel('Velocity (m/s)')
 
         fig.suptitle('Quadrotor State Over Time', fontsize=16)
 
@@ -931,3 +1017,4 @@ if __name__ == "__main__":
         # plt.plot(ts[:-1],Us[:,0])
 
         # plt.show()
+# %%
