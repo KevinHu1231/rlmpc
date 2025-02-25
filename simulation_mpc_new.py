@@ -434,6 +434,7 @@ if __name__ == "__main__":
 
         q.append(x0[6::])
         q_ref.append(uav.X_r[0, 6::])
+        
         # MPC loop
 
         for i in range(1000):
